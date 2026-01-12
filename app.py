@@ -1,9 +1,9 @@
 import streamlit as st
 import pickle
 import torch
+import os
 import pandas as pd
 import numpy as np
-import os
 
 from sasrec_model import SASRecWithLLMAndIPS
 from recommender import recommend_movies
@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 # =========================
-# PATH HANDLING (STREAMLIT SAFE)
+# BASE DIRECTORY
 # =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -29,19 +29,45 @@ EMB_PATH = os.path.join(BASE_DIR, "models", "item_embeddings.pkl")
 DEVICE = torch.device("cpu")
 
 # =========================
-# LOAD DATA & MODEL
+# DEBUG PANEL (WAJIB ADA SEKARANG)
+# =========================
+with st.expander("🔍 Debug File System"):
+    st.write("📂 BASE_DIR:", BASE_DIR)
+
+    if os.path.exists(BASE_DIR):
+        st.write("📁 Root files:", os.listdir(BASE_DIR))
+
+    if os.path.exists(os.path.join(BASE_DIR, "data")):
+        st.write("📁 data/:", os.listdir(os.path.join(BASE_DIR, "data")))
+    else:
+        st.error("❌ Folder `data/` TIDAK ADA")
+
+    if os.path.exists(os.path.join(BASE_DIR, "models")):
+        st.write("📁 models/:", os.listdir(os.path.join(BASE_DIR, "models")))
+    else:
+        st.error("❌ Folder `models/` TIDAK ADA")
+
+# =========================
+# LOAD ALL (SAFE)
 # =========================
 @st.cache_resource
 def load_all():
-    # Load movies
+    if not os.path.exists(DATA_PATH):
+        raise FileNotFoundError(f"❌ Tidak ditemukan: {DATA_PATH}")
+
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(f"❌ Tidak ditemukan: {MODEL_PATH}")
+
+    if not os.path.exists(EMB_PATH):
+        raise FileNotFoundError(f"❌ Tidak ditemukan: {EMB_PATH}")
+
+    # Load data
     with open(DATA_PATH, "rb") as f:
         movies = pickle.load(f)
 
-    # Load item embeddings
     with open(EMB_PATH, "rb") as f:
         item_embeddings = pickle.load(f)
 
-    # Model params (HARUS SAMA DENGAN TRAINING)
     n_items = movies["item_id"].nunique()
 
     model = SASRecWithLLMAndIPS(
@@ -54,94 +80,78 @@ def load_all():
         llm_dim=768
     )
 
-    model.load_state_dict(
-        torch.load(MODEL_PATH, map_location=DEVICE)
-    )
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
     model.eval()
 
     return movies, item_embeddings, model
 
+# =========================
+# LOAD
+# =========================
 movies, item_embeddings, model = load_all()
 
 # =========================
 # HEADER
 # =========================
 st.markdown("""
-<div style="text-align:center; padding:20px;">
-    <h1>🎬 MovieVerse AI</h1>
-    <p style="color:#64748b;">
-        SASRec + LLM + Inverse Propensity Scoring
-    </p>
+<div style="text-align:center;padding:20px;">
+<h1>🎬 MovieVerse AI</h1>
+<p style="color:#64748b;">SASRec + LLM + IPS</p>
 </div>
 """, unsafe_allow_html=True)
 
 # =========================
-# SIDEBAR – USER HISTORY
+# SIDEBAR
 # =========================
 with st.sidebar:
-    st.header("👤 Histori Tontonan")
+    st.header("🎥 Histori Tontonan")
 
     watched_titles = st.multiselect(
-        "Pilih minimal 5 film yang pernah ditonton",
+        "Pilih minimal 5 film",
         movies["title"].values
     )
 
-    st.markdown("---")
-    run_button = st.button("🚀 Tampilkan Rekomendasi")
+    run_btn = st.button("🚀 Tampilkan Rekomendasi")
 
 # =========================
-# MAIN LOGIC
+# MAIN
 # =========================
 MIN_WATCH = 5
-TOP_K = 10
 
-if not run_button:
-    st.info("👈 Pilih film di sidebar lalu tekan **Tampilkan Rekomendasi**")
+if not run_btn:
+    st.info("👈 Pilih film lalu klik tombol rekomendasi")
 
 elif len(watched_titles) < MIN_WATCH:
-    st.warning(f"⚠️ Minimal pilih **{MIN_WATCH} film**")
+    st.warning(f"⚠️ Minimal pilih {MIN_WATCH} film")
 
 else:
-    # Convert titles → item_id sequence
     user_sequence = (
         movies[movies["title"].isin(watched_titles)]
         .sort_values("item_id")["item_id"]
         .tolist()
     )
 
-    with st.spinner("🔍 Menganalisis preferensi Anda..."):
-        recommendations = recommend_movies(
+    with st.spinner("🔍 Menghasilkan rekomendasi..."):
+        recs = recommend_movies(
             model=model,
             user_sequence=user_sequence,
             item_embeddings=item_embeddings,
             movies_df=movies,
-            k=TOP_K,
+            k=10,
             use_llm=True
         )
 
     st.subheader("✨ 10 Rekomendasi Film Untuk Anda")
 
-    # ===== GRID 5 x 2 =====
     cols = st.columns(5)
-
-    for i, rec in enumerate(recommendations):
+    for i, rec in enumerate(recs):
         with cols[i % 5]:
             st.markdown(f"""
-            <div style="
-                background:#ffffff;
-                padding:18px;
-                border-radius:14px;
-                text-align:center;
-                box-shadow:0 8px 20px rgba(15,23,42,0.08);
-                margin-bottom:20px;
-            ">
-                <h4 style="font-size:14px; min-height:48px;">
-                    {rec['title']}
-                </h4>
-                <p style="font-size:12px; color:#64748b;">
-                    🎭 {rec['genres']}
-                </p>
-                <p style="font-size:12px; color:#2563eb; font-weight:600;">
+            <div style="background:#fff;padding:16px;border-radius:14px;
+            box-shadow:0 8px 20px rgba(0,0,0,0.08);margin-bottom:20px;text-align:center">
+                <h4 style="font-size:14px;min-height:48px">{rec['title']}</h4>
+                <p style="font-size:12px;color:#64748b">🎭 {rec['genres']}</p>
+                <p style="font-size:12px;font-weight:600;color:#2563eb">
                     Score: {rec['score']:.4f}
                 </p>
             </div>
@@ -152,8 +162,7 @@ else:
 # =========================
 st.markdown("""
 <hr>
-<div style="text-align:center; color:#64748b; font-size:13px;">
-MovieVerse AI • SASRec + LLM + IPS<br>
-Thesis-Grade Recommendation System
+<div style="text-align:center;color:#64748b;font-size:13px">
+MovieVerse AI • Thesis-Grade Recommender System
 </div>
 """, unsafe_allow_html=True)
